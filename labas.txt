@@ -1,0 +1,8 @@
+FileName DB 'labas.txt', 0
+Buffer	DB 200, ?, 200 dup (?)
+OpenError DB "An error has occured(opening)!$"
+ReadError DB "An error has occStringFound DB "StringFound!$"
+onPointerMove DB "onPointerMove", 0Dh, 0Ah, "$"
+onReloadPointer DB "onReloadPointer", 0Dh, 0Ah, "$"
+onBufferFull DB "onBufferFull", 0Dh, 0Ah, "$"
+Looping DB "Looping", 0Dh, 0Ah, "$"

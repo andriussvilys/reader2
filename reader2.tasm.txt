@@ -1,0 +1,61 @@
+.model small
+.stack 100h
+
+.data
+FileHandle DW 0 	                ; use this for saving the file handle
+FileName DB 'labas.txt', 0
+Buffer	DB 200 dup (?)
+BufferDest DB 200 dup (?)
+BufferSize DW 190
+
+OpenError DB "An error has occured(opening)!$"
+ReadError DB "An error has occured(reading)!$"
+StringFound DB "StringFound!$"
+onPointerMove DB 13, 10, "MATCH $"
+onReloadPointer DB "reload", 0Dh, 0Ah, "$"
+onBufferFull DB "onBufferFull", 0Dh, 0Ah, "$"
+onFindStringSuccess DB 13, 10, "String found$", 13, 10
+onFindStringFail DB 13, 10, "String NOT found$", 13, 10
+
+string1 DB 'labas.txt'
+string1_size DW 9
+string1_counter DB 0    
+substr_position DW 0
+
+string2 DB "CHANGED_STRING"
+string2_size DW 14
+
+FileSize DW 0
+
+.code 
+
+start:
+
+mov ax, @data
+mov es, ax
+
+mov si, 81h           ;programos paleidimo parametrai
+
+mov al, byte ptr ds:[si]    ;  nuskaityti pirma parametro simboli
+
+print_params PROC near
+
+    mov ah, 2
+
+    print_char:
+        lodsb                  ;load ds:si to al, then inc si
+        cmp al, ''
+        je print_params_end
+        int 21h                 
+        loop print_char
+
+print_params_end
+
+print_params ENDP
+
+endProgram:
+    MOV AH, 04Ch	; Select exit function
+    MOV AL, 00	    ; Return 0
+    INT 21h		    ; Call the interrupt to exit'
+
+end
