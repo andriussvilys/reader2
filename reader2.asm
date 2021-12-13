@@ -113,20 +113,9 @@ mov str2_buffer, bx
 mov bx, stringStart
 mov str2_offset, bx
 
+;determine which string comes first in file and will be swapped first
 call compareOffsets
 
-;mov bx, str_firstInFile
-;mov currentString, bx
-;mov bx, str_secondInFile
-;mov nextString, bx
-;
-;mov bx, str1_buffer
-;mov bufferCount, bx
-;mov bx, str1_offset
-;mov stringStart, bx
-;
-;call createTempFile
-;call resetFilePointer
 call updateFile
 
 call endProgram
@@ -462,10 +451,34 @@ updateBlock PROC near
         lea si, readBuffer
         call writeToTempFile  
 
+        ;start copying from the other string
         call swapStringInWriteBuffer
 
     ret
     updateBlock ENDP
+
+copyToEOF PROC near
+    
+
+
+    copyToEOFLoop:               ;copy until target buffer needs to be read
+        mov cx, max_buffer_size
+        
+        call readToBuffer         ;stores num of bytes read in AX
+        cmp ax, 00h
+        jz copyToEOFFinish
+
+        lea si, readBuffer
+        call writeToTempFile
+        jmp copyToEOFLoop
+
+    copyToEOFFinish:
+        ret
+    
+
+    ret
+    copyToEOF ENDP
+
 
 swapStringInWriteBuffer PROC near
     
@@ -507,12 +520,18 @@ swapStringInWriteBuffer PROC near
     finishSwap:
 
         mov ax, bx                  ;BX keeps track of how many bytes are copied to buffer
+        ;push bx                     ;save num of bytes recorded
+
         lea si, writeBuffer                  
         call writeToTempFile        ;AX - num of bytes to write, SI - source
 
+        ;pop bx
+
         ;move file pointer
-        mov cx, 0h                  ;MSW - we know that string length < 128, so MSW always 0
-        mov dx, bx                  ;LSW
+        mov si, currentString
+        call getASCIIZLength
+        mov dx, cx
+        mov cx, 0h                  
         mov bx, srcFileHandle
         mov al, 01h                 ;move pointer forward from current position
         mov ah, 42h
@@ -546,20 +565,55 @@ updateFile PROC near
 
     call updateBlock
 
+    ;stringStart and bufferCount now point to end of str1 (in OG file)
+    ;switch string pointers
+
     mov bx, str_secondInFile
     mov currentString, bx
     mov bx, str_firstInFile
     mov nextString, bx
 
-    mov bx, str2_offset
-    mov stringStart, bx
+    ;this works for file size < 64kB !!
+    ;ax : bufferCount
+    ;bx : buffer_size
+    ;cx : stringStart (offset in buffer)
+    ;dx : MSW
+    ;ax : LSW
+    ;1) get absolute address of str1 END
 
-    mov bx, str2_buffer
-    sub bx, bufferCount
-    mov bufferCount, bx
+        ;1.1) get of string position
+            mov si, str_firstInFile
+            call getASCIIZLength        ;CX == string length
+            add str1_offset, cx             ;BX == end of str1 position
+
+        ;1.2) get absolute address of end of string
+            mov ax, str1_buffer
+            mov bx, max_buffer_size
+            mov cx, str1_offset
+
+            call calcAbsoluteOffset
+            mov str1_offset, ax
+
+    ;2) get absolute address of str2
+            mov ax, str2_buffer
+            mov bx, max_buffer_size
+            mov cx, str2_offset
+            call calcAbsoluteOffset
+            mov str2_offset, ax
+    
+    ;3) get str2 position relative to str1 position
+    mov ax, str1_offset
+    sub str2_offset, ax
+
+    ;4)convert absolute addrees into bufferCount / stringStart expression
+    mov ax, str2_offset
+    div max_buffer_size
+    mov bufferCount, ax
+    mov stringStart, dx
 
     call updateBlock
 
+    call copyToEOF
 
     ret
     updateFile ENDP
@@ -580,6 +634,42 @@ getASCIIZLength PROC near
         ret
     
     getASCIIZLength ENDP
+
+;ax : bufferCount
+;bx : buffer_size
+;cx : stringStart (offset in buffer)
+;dx : MSW
+;ax : LSW
+calcAbsoluteOffset PROC near
+
+    mul bx                      ;multiply bufferCount(ax) * buffer_size(cx); result dx:ax (32-bit)
+
+    add ax, cx         ;add stringStart (position of string's FIRST BYTE in readBuffer)     
+    jc incMSW                   ;increment MSW (most significant word)
+
+    ret
+
+    incMSW:
+        inc dx
+        ret
+    
+    calcAbsoluteOffset ENDP
+
+;DEST : AX:DX, SRC BX:CX
+ADD_32BIT PROC near
+
+    add dx, cx
+    jc incMSW_add
+    jmp addMSW
+
+    incMSW_add:
+        inc ax
+
+    addMSW:
+        add ax, bx
+
+    ret
+    ADD_32BIT ENDP
 
 printBuffer PROC near   ;assumes CX and SI are loaded
     mov ah, 02h
