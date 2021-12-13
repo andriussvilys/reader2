@@ -2,12 +2,13 @@
 .stack 100h
 
 .data
-apie DB "this program opens a file and swaps two strings in the file", 13, 10, "open program with params:", 13, 10, "[source file] [string 1] [string 2]", 13, 10, "*use empty spaces to seprate params0", 13, 10,"*max param lenght: 20$"
+apie DB 13, 10, "this program opens a file and swaps two strings in the file", 13, 10, "open program with params:", 13, 10, "[source file] [string 1] [string 2]", 13, 10, "*use empty spaces to seprate params0", 13, 10,"*max param lenght: 20$"
 
 fileOpenError DB "File OPEN error.$"
 fileReadError DB "File READ error.$"
 fileCreateError DB "(temp) File CREATE error.$"
 fileWriteError DB "(temp) File WRITE error.$" 
+fileMovePointerError DB "(temp) File MOVE POINTER error.$" 
 
 stringFound DB 13, 10, "string found: $"
 stringSearchFail DB 13, 10, "string not found: $"
@@ -17,12 +18,13 @@ deeperStr DB " is deeper.$"
 tempFileName DB "tempfile.txt", 0
 tempFileHandle DW 0
 
-readBuffer DB 100 dup (?)
-writeBuffer DB 100 dup (?)
+readBuffer DB 100 dup (0)
+writeBuffer DB 100 dup (0)
 max_buffer_size DW 100          ;max value 2^16 && readBuffer >=
-bufferCount DW 00h
 
+bufferCount DW 00h
 currentString DW 0              ;ADDRESS of a string to find
+nextString DW 0
 stringStart DW 0                ;string start in readBuffer; string offset in file = bufferCount * max_buffer_size + stringStart
 bufferPointer_LSW DW 0
 bufferPointer_MSW DW 0
@@ -36,11 +38,6 @@ srcFileHandle DW ?
 str1 DB 100 dup (0)
 str2 DB 100 dup (0)
 
-str1_offset_LSW DW 0
-str1_offset_MSW DW 0
-str2_offset_LSW DW 0
-str2_offset_MSW DW 0
-
 str1_buffer DW 0
 str1_offset DW 0
 str2_buffer DW 0
@@ -49,8 +46,8 @@ str2_offset DW 0
 str_firstInFile DW 0
 str_secondInFile DW 0
 
-currentOffset_MSW DW 0
-currentOffset_LSW DW 0
+current_buffer DW 0
+current_offset DW 0
 
 swapMode DB 0
 
@@ -68,11 +65,11 @@ call skip_spaces
 
 mov al, byte ptr ds:[si]    ;si now points to first non-space char in params
 cmp al, 13
-je help
+je callHelp
 
 mov ax, word ptr ds:[si]
 cmp ax, 3F2Fh                  ;3F='?', 2F='/' 3F2F='/?'
-je help
+je callHelp
 
 lea di, srcFileName         ;load srcFileName address to di
 call save_param
@@ -83,14 +80,16 @@ call save_param
 lea di, str2
 call save_param
 
+jmp next
+
+callHelp:
+    jmp help
+
+
+next:
+
 mov ax, @data                ;load ds segment
 mov ds, ax
-
-lea si, str1
-call getASCIIZLength
-
-lea si, str2
-call getASCIIZLength
 
 call get_file_handle        ;open file and stores file handle in variable fileHandle
 
@@ -98,10 +97,10 @@ lea bx, str1
 mov currentString, bx
 call findString
 
-mov bx, currentOffset_LSW
-mov str1_offset_LSW, bx
-mov bx, currentOffset_MSW
-mov str1_offset_MSW, bx
+mov bx, bufferCount
+mov str1_buffer, bx
+mov bx, stringStart
+mov str1_offset, bx
 
 call resetFilePointer
 
@@ -109,21 +108,37 @@ lea bx, str2
 mov currentString, bx
 call findString
 
-mov bx, currentOffset_LSW
-mov str2_offset_LSW, bx
-mov bx, currentOffset_MSW
-mov str2_offset_MSW, bx
+mov bx, bufferCount
+mov str2_buffer, bx
+mov bx, stringStart
+mov str2_offset, bx
 
 call compareOffsets
 
-call createTempFile
-
-call resetFilePointer
-
-xor cx, cx
-call writeToFile
+;mov bx, str_firstInFile
+;mov currentString, bx
+;mov bx, str_secondInFile
+;mov nextString, bx
+;
+;mov bx, str1_buffer
+;mov bufferCount, bx
+;mov bx, str1_offset
+;mov stringStart, bx
+;
+;call createTempFile
+;call resetFilePointer
+call updateFile
 
 call endProgram
+
+help:
+    mov ax, @data
+    mov ds, ax
+
+    mov dx, offset apie
+    mov ah, 9
+    int 21h
+    call endProgram
 
 ;------- READ PARAMS
 
@@ -140,14 +155,6 @@ skip_spaces PROC near
     
     skip_spaces ENDP
 
-help:
-    mov ax, @data
-    mov ds, ax
-
-    mov dx, offset apie
-    mov ah, 9
-    int 21h
-    call endProgram
 
 save_param PROC near
     call skip_spaces
@@ -220,21 +227,6 @@ resetFilePointer PROC near
     ret
     resetFilePointer ENDP
 
-;move filePointer to absoluteFileOffset
-moveFilePointer PROC near
-
-    mov ah, 42h                 ;move file pointer
-    mov al, 0h                  ;to beginning
-    mov bx, srcFileHandle
-    mov cx, currentOffset_MSW                  ;cx - MSW (most significant word)
-    mov dx, currentOffset_LSW                  ;dx - LSW (least significant word)
-    int 21h
-
-    jc error_fileRead
-
-    ret
-    moveFilePointer ENDP
-
 ;read bytes from file to readBuffer
 ;CX must be loaded
 ;returs AX == number of bytes read
@@ -257,8 +249,6 @@ readToBuffer PROC near
 findString PROC near
 
     mov di, currentString                ;DI - string pointer
-    mov currentOffset_LSW, 0h
-    mov currentOffset_MSW, 0h
     mov bufferCount, 0h
     mov stringStart, 0h
 
@@ -322,7 +312,6 @@ findString PROC near
 
 
     success:
-        call calcOffsetInFile
         mov ah, 09h
         lea dx, stringFound
         int 21h
@@ -334,26 +323,6 @@ findString PROC near
 
     ret
     findString ENDP
-
-calcOffsetInFile PROC near
-
-    mov ax, bufferCount
-    mov bx, max_buffer_size
-    mul bx                      ;multiply bufferCount(ax) * buffer_size(cx); result dx:ax (32-bit)
-
-    add ax, stringStart         ;add stringStart (position of string's FIRST BYTE in readBuffer)     
-    jc incMSW                   ;increment MSW (most significant word)
-
-    storeResult:
-        mov currentOffset_LSW, ax
-        mov currentOffset_MSW, dx
-        ret
-
-    incMSW:
-        inc dx
-        jmp storeResult
-    
-    calcOffsetInFile ENDP
 
 ;num1: ax:bx
 ;num2: cx:dx
@@ -373,28 +342,40 @@ CMP_32BIT PROC near
 ;assigns str_firstInFile and str_secondInFile
 compareOffsets PROC near
 
-    ;str1 offset
-    mov ax, str1_offset_MSW
-    mov bx, str1_offset_LSW
-    ;str2 offset
-    mov cx, str2_offset_MSW         
-    mov dx, str2_offset_LSW
+    ;First compare buffer indexes
+    mov ax, str1_buffer
+    mov cx, str2_buffer         
 
-    call CMP_32BIT
+    ;dst == stc : ZF
+    ;dst < src  : CF
+    ;dst > src  : NZF
+    cmp ax, cx
 
     jc str2_IsFurther
-    jnz str1_IsFurther                                ;otherwise consider str1 to be deeper in file
-        
+    jnz str1_IsFurther   
+                    
+    ;if on the same buffer, compare offset in buffer
+    mov bx, str1_offset
+    mov dx, str2_offset
+
+    cmp bx, dx
+    jc str2_IsFurther
+    jnz str1_IsFurther   
+
+    ;str2 is first in file
     str1_IsFurther:
         lea bx, str2
         mov str_firstInFile, bx
         lea bx, str1
         mov str_secondInFile, bx
 
-        mov bx, str1_offset_LSW
-        xchg str2_offset_LSW, bx
-        mov bx, str1_offset_MSW
-        xchg str2_offset_MSW, bx
+        mov bx, str1_offset
+        xchg str2_offset, bx
+        mov str1_offset, bx
+
+        mov bx, str1_buffer
+        xchg str2_buffer, bx
+        mov str1_buffer, bx
 
         jmp finishOffsetCompare
 
@@ -423,7 +404,7 @@ createFileError:
     call endProgram
 
 writeFileError:
-    lea dx, writeFileError
+    lea dx, fileMovePointerError
     mov ah, 09h
     int 21h
     call endProgram
@@ -440,118 +421,148 @@ createTempFile PROC near
     ret
     createTempFile ENDP
 
-writeToFile PROC near
+;SI MUST be set to sourceBuffer address
+;AX MUST have num of bytes to write
+writeToTempFile PROC near
 
-    writeLoop:
+    mov cx, ax              ;move amount of bytes read to CX
+    mov ah, 40h
+    mov bx, tempFileHandle
+    mov dx, si
+    int 21h
 
-        push cx
-        call createWriteBuffer
-        cmp ax, 0h               ;loop until no more bytes are read from srcFile
-        jz writeFinish
-
-        mov cx, ax              ;move amount of bytes read to CX
-        mov ah, 40h
-        mov bx, tempFileHandle
-        lea dx, writeBuffer
-        int 21h
-
-        jc writeFileError
-
-        pop cx
-        inc cx
-
-        jmp writeLoop
-
-
-    writeFinish:
-        pop cx
-        ret
-
-    writeToFile ENDP
-
-;si - readBuffer
-;di - writeBuffer
-createWriteBuffer PROC near
-    
-    lea di, writeBuffer         ;DI always points to writeBuffer
-
-    cmp swapMode, 0h
-    jnz swap_return           ;SI points to swap string
-
-    lea si, readBuffer          ;or to readBuffer
-    
-    readLoop:
-                 
-        push cx                     ;save num of calls to this PROC
-
-        mov cx, max_buffer_size     ;CX must be set before calling readToBuffer
-        call readToBuffer           ;stores num of bytes read in AX
-
-        cmp ax, 0h              ;if 0 bytes read
-        jz finishCopy
-
-        pop cx
-        cmp cx, bufferCount         ;here CX stands for the number of createWriteBuffer calls
-        jz replaceLoop_start        ;if string starts in this buffer
-
-        mov dx, ax              ;save number of bytes read
-        mov cx, ax              ;move number of bytes read to CX
-
-    copyByte:
-        movsb
-        loop copyByte
-
-    finishCopy:
-        ret          
-
-    replaceLoop_start:                 ;starts with new buffer
-        mov cx, stringStart            ;stringStart < max_buffer_size
-
-    replaceLoop_continue:              ;movsb until stringStart is reached
-        movsb
-        loop replaceLoop_continue
-
-    swap_start:                     ;start swapping string
-        mov cx, dx                  ;move number of read bytes to cx
-        sub cx, stringStart
-        mov bx, si                  ;save readBuffer position in BX
-        mov si, str_secondInFile        
-        mov swapMode, 1h            ;set swap mode in case string spans more than 1 buffer
-    
-    swap_continue:
-        lodsb                       ;load byte from DS:[SI] to AL
-
-        cmp al, 0h
-        jz swap_finish              ;if string copied before buffer end
-
-        stosb                       ;DI points to writeBuffer
-        loop swap_continue          ;loop until writeBuffer is full
-
-    swap_interrupted:               ;if writeBuffer is full before end of string
-        mov ax, dx
-        ret
-
-    swap_finish:
-        mov swapMode, 0h                ;swapMode == FALSE
-        ;move SI (read buffer) forward by old string length
-        push cx                         ;save current writeBuffer position
-                                        ;getASCIIZLength uses CX
-        mov si, str_firstInFile         ;reload string address
-        call getASCIIZLength    
-        mov ax, cx                      ;save string length to AX
-        pop cx                          ;recover writeBuffer position
-        mov si, bx                      ;recover previous readBuffer position
-        add si, ax                      ;move SI forward by [stringLength] bytes               
-        loop copyByte
-        ret
-
-    swap_return:
-        mov cx, max_buffer_size
-        jmp swap_continue
+    jc writeFileError
 
     ret
+    writeToTempFile ENDP
 
-    createWriteBuffer ENDP
+;currentString, nextString, bufferCount MUST be loaded
+updateBlock PROC near
+
+    mov cx, bufferCount
+    cmp cx, 0h              ;if string is in buffer 0
+    jz stringBuffer
+    
+    copyLoop:               ;copy until target buffer needs to be read
+        push cx             ;save loop CX
+        mov cx, max_buffer_size
+        call readToBuffer         ;stores num of bytes read in AX
+        lea si, readBuffer
+        call writeToTempFile
+        pop cx              ;restore loop CX
+        loop copyLoop
+
+    ;when buffer with string will be read
+    ;copy to writeBuffer from readBuffer until stringStart
+    ;then copy from nextString
+    stringBuffer:        
+        mov cx, stringStart         ;load max num of bytes to read
+        call readToBuffer               ;stores num of bytes read in AX
+        
+        lea si, readBuffer
+        call writeToTempFile  
+
+        call swapStringInWriteBuffer
+
+    ret
+    updateBlock ENDP
+
+swapStringInWriteBuffer PROC near
+    
+    mov si, nextString       ;copy bytes from nextString (nextString is ADDRESS of current string)
+    lea di, writeBuffer
+    mov cx, max_buffer_size
+    xor bx, bx
+
+    copyString:
+        lodsb
+
+        cmp al, 00h             ;if end of string
+        jz finishSwap
+
+        stosb                   ;DI points to writeBuffer
+        inc bx                  ;track how many bytes copied to writeBuffer
+        
+        loop copyString
+
+    ;control here if buffer is full before end of string
+    ;for cases when string spans multiple buffers
+    copyToFile:
+
+        push si                         ;save string pointer
+                               
+        mov ax, bx                      ;how many bytes to write
+        lea si, writeBuffer             ;SI must be loaded for writeToTempFile
+        call writeToTempFile  
+        
+        pop si                          ;recover string pointer
+
+        mov cx, max_buffer_size         ;reset CX
+        xor bx, bx                      ;reset writeBuffer
+        lea di, writeBuffer             ;reset writeBuffer pointer
+        
+        loop copyString 
+
+    ;this is called when string ends before buffer is full
+    finishSwap:
+
+        mov ax, bx                  ;BX keeps track of how many bytes are copied to buffer
+        lea si, writeBuffer                  
+        call writeToTempFile        ;AX - num of bytes to write, SI - source
+
+        ;move file pointer
+        mov cx, 0h                  ;MSW - we know that string length < 128, so MSW always 0
+        mov dx, bx                  ;LSW
+        mov bx, srcFileHandle
+        mov al, 01h                 ;move pointer forward from current position
+        mov ah, 42h
+        int 21h
+        jc movePointerError
+
+        ret
+
+    swapStringInWriteBuffer ENDP
+
+movePointerError:
+    lea dx, writeFileError
+    mov ah, 09h
+    int 21h
+    call endProgram
+
+updateFile PROC near
+
+    call createTempFile
+    call resetFilePointer
+
+    mov bx, str_firstInFile
+    mov currentString, bx
+    mov bx, str_secondInFile
+    mov nextString, bx
+
+    mov bx, str1_buffer
+    mov bufferCount, bx
+    mov bx, str1_offset
+    mov stringStart, bx
+
+    call updateBlock
+
+    mov bx, str_secondInFile
+    mov currentString, bx
+    mov bx, str_firstInFile
+    mov nextString, bx
+
+    mov bx, str2_offset
+    mov stringStart, bx
+
+    mov bx, str2_buffer
+    sub bx, bufferCount
+    mov bufferCount, bx
+
+    call updateBlock
+
+
+    ret
+    updateFile ENDP
 
 ;si - string address
 getASCIIZLength PROC near
