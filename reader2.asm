@@ -335,7 +335,7 @@ compareOffsets PROC near
     mov ax, str1_buffer
     mov cx, str2_buffer         
 
-    ;dst == stc : ZF
+    ;dst == src : ZF
     ;dst < src  : CF
     ;dst > src  : NZF
     cmp ax, cx
@@ -566,14 +566,8 @@ updateFile PROC near
     call updateBlock
 
     ;stringStart and bufferCount now point to end of str1 (in OG file)
-    ;switch string pointers
 
-    mov bx, str_secondInFile
-    mov currentString, bx
-    mov bx, str_firstInFile
-    mov nextString, bx
-
-    ;this works for file size < 64kB !!
+    ;this works for file size <= 64kB !!
     ;ax : bufferCount
     ;bx : buffer_size
     ;cx : stringStart (offset in buffer)
@@ -581,35 +575,80 @@ updateFile PROC near
     ;ax : LSW
     ;1) get absolute address of str1 END
 
-        ;1.1) get of string position
-            mov si, str_firstInFile
-            call getASCIIZLength        ;CX == string length
-            add str1_offset, cx             ;BX == end of str1 position
+;        ;1.1) get str1 EOS position
+;            mov si, str_firstInFile
+;            call getASCIIZLength        ;CX == string length
+;            add str1_offset, cx             ;BX == end of str1 position
+;
+;        ;1.2) get absolute address of end of string
+;            mov ax, str1_buffer
+;            mov bx, max_buffer_size
+;            mov cx, str1_offset
+;
+;            call calcAbsoluteOffset
+;            mov str1_offset, ax
+;
+;    ;2) get absolute address of str2
+;            mov ax, str2_buffer
+;            mov bx, max_buffer_size
+;            mov cx, str2_offset
+;            call calcAbsoluteOffset
+;            mov str2_offset, ax
+;    
+;    ;3) get str2 position relative to str1 position
+;            mov ax, str1_offset
+;            sub str2_offset, ax
+;
+;    ;4)convert absolute addrees into bufferCount / stringStart expression
+;            mov ax, str2_offset
+;            div max_buffer_size
+;            mov bufferCount, ax
+;            mov stringStart, dx
 
-        ;1.2) get absolute address of end of string
-            mov ax, str1_buffer
-            mov bx, max_buffer_size
-            mov cx, str1_offset
+    ;1) get str1 EOS position
+        mov si, str_firstInFile     ;si must be loaded for getASCIIZLength procedure
+        call getASCIIZLength        ;CX == string length
+        add cx, str1_offset             ;add string start and string length to get EOS
 
-            call calcAbsoluteOffset
-            mov str1_offset, ax
+    ;2) check if EOS is beyond buffer
+        checkEOS:
+        cmp cx, max_buffer_size
+        jnz normalizeOffset1               ;jnz : dest < src OR dest > src
 
-    ;2) get absolute address of str2
-            mov ax, str2_buffer
-            mov bx, max_buffer_size
-            mov cx, str2_offset
-            call calcAbsoluteOffset
-            mov str2_offset, ax
-    
-    ;3) get str2 position relative to str1 position
-    mov ax, str1_offset
-    sub str2_offset, ax
+    ;3) get str2 offset and buffer
+        recalcOffset2:      
+            sub str2_offset, cx        ;CX : offset1
+            js normalizeOffset2        ;if str1_offset > str1_offset
+            jmp recalcBuffer2
 
-    ;4)convert absolute addrees into bufferCount / stringStart expression
-    mov ax, str2_offset
-    div max_buffer_size
-    mov bufferCount, ax
-    mov stringStart, dx
+        normalizeOffset2:
+            neg str2_offset     ;get absolute value
+            dec str2_buffer
+
+        recalcBuffer2:
+            mov bx, str1_buffer     ;buffer1 => buffer2 ALWAYS
+            sub str2_buffer, bx
+            jmp writeStr2
+
+        normalizeOffset1:           ;jmp here if CX > max_buffer_size
+            jc recalcOffset2        ;if max_buffer_size > CX
+            inc str1_buffer
+            sub cx, max_buffer_size
+            jmp checkEOS
+
+
+    writeStr2:
+
+    ;switch string pointers
+    mov bx, str_secondInFile
+    mov currentString, bx
+    mov bx, str_firstInFile
+    mov nextString, bx
+
+    mov cx, str2_buffer
+    mov bufferCount, cx
+    mov cx, str2_offset
+    mov stringStart, cx
 
     call updateBlock
 
@@ -700,6 +739,14 @@ printASCIIZ PROC near   ;assumes si is loaded with address of the string
     printASCIIZ ENDP
 
 endProgram PROC near
+
+    mov ah, 3Eh
+    mov bx, srcFileHandle
+    int 21h
+
+    mov bx, tempFileHandle
+    int 21h
+
     MOV AH, 04Ch	; Select exit function
     MOV AL, 00	    ; Return 0
     INT 21h		    ; Call the interrupt to exit
